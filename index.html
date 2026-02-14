@@ -195,13 +195,58 @@ function generateCleanSVG(blocks,connections){
 
 function App(){
   const[blocks,setBlocks]=useState([]);const[connections,setConnections]=useState([]);
-  const[selected,setSelected]=useState(null);const[dragging,setDragging]=useState(null);
+  // Undo/Redo
+  const historyRef=useRef([{blocks:[],connections:[]}]);
+  const historyIdxRef=useRef(0);
+  const skipSnapshotRef=useRef(false);
+  const pushHistory=(newBlocks,newConns)=>{
+    if(skipSnapshotRef.current){skipSnapshotRef.current=false;return}
+    const h=historyRef.current;const idx=historyIdxRef.current;
+    const snap={blocks:JSON.parse(JSON.stringify(newBlocks)),connections:JSON.parse(JSON.stringify(newConns))};
+    // Only push if different from current
+    if(JSON.stringify(snap)===JSON.stringify(h[idx]))return;
+    historyRef.current=h.slice(0,idx+1).concat(snap);
+    if(historyRef.current.length>60)historyRef.current=historyRef.current.slice(historyRef.current.length-60);
+    historyIdxRef.current=historyRef.current.length-1;
+  };
+  const undo=useCallback(()=>{
+    const idx=historyIdxRef.current;
+    if(idx<=0)return;
+    historyIdxRef.current=idx-1;
+    const snap=historyRef.current[idx-1];
+    skipSnapshotRef.current=true;
+    setBlocks(JSON.parse(JSON.stringify(snap.blocks)));
+    skipSnapshotRef.current=true;
+    setConnections(JSON.parse(JSON.stringify(snap.connections)));
+    setSelected(null);setMultiSel([]);
+  },[]);
+  const redo=useCallback(()=>{
+    const idx=historyIdxRef.current;
+    if(idx>=historyRef.current.length-1)return;
+    historyIdxRef.current=idx+1;
+    const snap=historyRef.current[idx+1];
+    skipSnapshotRef.current=true;
+    setBlocks(JSON.parse(JSON.stringify(snap.blocks)));
+    skipSnapshotRef.current=true;
+    setConnections(JSON.parse(JSON.stringify(snap.connections)));
+    setSelected(null);setMultiSel([]);
+  },[]);
+  // Snapshot on blocks/connections change (debounced to avoid per-pixel snapshots during drag)
+  const snapTimerRef=useRef(null);
+  useEffect(()=>{
+    if(snapTimerRef.current)clearTimeout(snapTimerRef.current);
+    snapTimerRef.current=setTimeout(()=>pushHistory(blocks,connections),300);
+  },[blocks,connections]);
+  const[selected,setSelected]=useState(null);const[multiSel,setMultiSel]=useState([]);
+  const[dragging,setDragging]=useState(null);const[groupDragging,setGroupDragging]=useState(null);
   const[connecting,setConnecting]=useState(null);const[tempLine,setTempLine]=useState(null);
   const[hoveredAnchor,setHoveredAnchor]=useState(null);const[editingBlock,setEditingBlock]=useState(null);
   const[editText,setEditText]=useState("");const[showSubTypeMenu,setShowSubTypeMenu]=useState(null);
-  const[resizing,setResizing]=useState(null);const[nearestAnchor,setNearestAnchor]=useState(null);
+  const[resizing,setResizing]=useState(null);const[groupResizing,setGroupResizing]=useState(null);
+  const[nearestAnchor,setNearestAnchor]=useState(null);
   const[dark,setDark]=useState(true);const[colorPicker,setColorPicker]=useState(null);
   const[showExport,setShowExport]=useState(false);
+  const[marquee,setMarquee]=useState(null); // {startX,startY,curX,curY}
   // Zoom state
   const[zoom,setZoom]=useState(1);
   const[pan,setPan]=useState({x:0,y:0});
@@ -213,7 +258,9 @@ function App(){
   const CW=4000,CH=3000;
 
   const selectedBlock=blocks.find(b=>b.id===selected)||null;
-  const handleStyleChange=ns=>{if(!selected)return;setBlocks(p=>p.map(b=>b.id===selected?{...b,style:ns}:b))};
+  const allSelected=multiSel.length>0?multiSel:(selected?[selected]:[]);
+  const isBlockSelected=id=>allSelected.includes(id);
+  const handleStyleChange=ns=>{if(allSelected.length===0)return;setBlocks(p=>p.map(b=>allSelected.includes(b.id)?{...b,style:ns}:b))};
 
   // Convert screen coords -> canvas coords accounting for zoom+pan+scroll
   const getCC=useCallback(e=>{
@@ -283,37 +330,110 @@ function App(){
   },[pendingType]);
 
   const handleSubTypeSelect=st=>{if(!showSubTypeMenu)return;const b={...showSubTypeMenu.block,subType:st,text:st==="start"?"시작":"끝"};setBlocks(p=>[...p,b]);setSelected(b.id);setShowSubTypeMenu(null)};
-  const handleBlockMouseDown=(e,id)=>{if(e.button!==0)return;e.stopPropagation();setSelected(id);const b=blocks.find(bl=>bl.id===id);if(!b)return;const{x:mx,y:my}=getCC(e);setDragging({id,offsetX:mx-b.x,offsetY:my-b.y})};
+  const handleBlockMouseDown=(e,id)=>{if(e.button!==0)return;e.stopPropagation();
+    const{x:mx,y:my}=getCC(e);
+    // If clicking a block that's part of multi-selection, start group drag
+    if(multiSel.includes(id)){
+      const offsets=multiSel.map(bid=>{const b=blocks.find(bl=>bl.id===bid);return b?{id:bid,ox:mx-b.x,oy:mx-b.y,oxReal:mx-b.x,oyReal:my-b.y}:null}).filter(Boolean);
+      setGroupDragging({offsets,startX:mx,startY:my});
+      return;
+    }
+    setSelected(id);setMultiSel([]);
+    const b=blocks.find(bl=>bl.id===id);if(!b)return;
+    setDragging({id,offsetX:mx-b.x,offsetY:my-b.y});
+  };
   const handleAnchorMouseDown=(e,blockId,anchorId,anchor)=>{e.stopPropagation();setConnecting({fromBlock:blockId,fromAnchor:anchorId,fromSide:anchor.side});setTempLine({x1:anchor.cx,y1:anchor.cy,x2:anchor.cx,y2:anchor.cy,fromSide:anchor.side})};
-  const handleResizeMouseDown=(e,blockId)=>{e.stopPropagation();const b=blocks.find(bl=>bl.id===blockId);if(!b)return;setResizing({id:blockId,startX:e.clientX,startY:e.clientY,origW:b.w,origH:b.h})};
+  const handleResizeMouseDown=(e,blockId)=>{e.stopPropagation();
+    if(multiSel.length>1&&multiSel.includes(blockId)){
+      // Group resize: compute bounding box
+      const selBlocks=blocks.filter(b=>multiSel.includes(b.id));
+      const bx=Math.min(...selBlocks.map(b=>b.x)),by=Math.min(...selBlocks.map(b=>b.y));
+      const br=Math.max(...selBlocks.map(b=>b.x+b.w)),bb=Math.max(...selBlocks.map(b=>b.y+b.h));
+      const origBlocks=selBlocks.map(b=>({id:b.id,x:b.x,y:b.y,w:b.w,h:b.h}));
+      setGroupResizing({startX:e.clientX,startY:e.clientY,bx,by,bw:br-bx,bh:bb-by,origBlocks});
+      return;
+    }
+    const b=blocks.find(bl=>bl.id===blockId);if(!b)return;
+    setResizing({id:blockId,startX:e.clientX,startY:e.clientY,origW:b.w,origH:b.h});
+  };
   const findNearest=useCallback((mx,my,exId)=>{let best=null,bestD=SNAP_DIST/zoom;for(const b of blocks){if(b.id===exId)continue;for(const a of getBlockAnchors(b)){const d=Math.sqrt((a.cx-mx)**2+(a.cy-my)**2);if(d<bestD){bestD=d;best={blockId:b.id,anchorId:a.id,cx:a.cx,cy:a.cy,side:a.side}}}}return best},[blocks,zoom]);
 
   const handleMouseMove=useCallback(e=>{
     if(!svgRef.current)return;const{x:mx,y:my}=getCC(e);
+    if(marquee){setMarquee(p=>p?{...p,curX:mx,curY:my}:null);return}
+    if(groupDragging){
+      const dx=mx-groupDragging.startX,dy=my-groupDragging.startY;
+      setBlocks(p=>p.map(b=>{const off=groupDragging.offsets.find(o=>o.id===b.id);return off?{...b,x:b.x+dx-((groupDragging.prevDx||0)),y:b.y+dy-((groupDragging.prevDy||0))}:b}));
+      setGroupDragging(p=>({...p,startX:mx,startY:my}));
+      if(panelRef.current){const pr=panelRef.current.getBoundingClientRect();setDragOverPanel(e.clientX>=pr.left&&e.clientX<=pr.right&&e.clientY>=pr.top&&e.clientY<=pr.bottom)}
+      return;
+    }
+    if(groupResizing){
+      const dx=(e.clientX-groupResizing.startX)/zoom,dy=(e.clientY-groupResizing.startY)/zoom;
+      const scaleX=Math.max(0.3,(groupResizing.bw+dx)/groupResizing.bw),scaleY=Math.max(0.3,(groupResizing.bh+dy)/groupResizing.bh);
+      setBlocks(p=>p.map(b=>{const orig=groupResizing.origBlocks.find(o=>o.id===b.id);if(!orig)return b;
+        return{...b,x:groupResizing.bx+(orig.x-groupResizing.bx)*scaleX,y:groupResizing.by+(orig.y-groupResizing.by)*scaleY,w:Math.max(60,orig.w*scaleX),h:Math.max(30,orig.h*scaleY)};
+      }));return;
+    }
     if(dragging){
       setBlocks(p=>p.map(b=>b.id===dragging.id?{...b,x:mx-dragging.offsetX,y:my-dragging.offsetY}:b));
       if(panelRef.current){const pr=panelRef.current.getBoundingClientRect();setDragOverPanel(e.clientX>=pr.left&&e.clientX<=pr.right&&e.clientY>=pr.top&&e.clientY<=pr.bottom)}
     }
     if(connecting){const near=findNearest(mx,my,connecting.fromBlock);setNearestAnchor(near);setTempLine(p=>p?{...p,x2:near?near.cx:mx,y2:near?near.cy:my,toSide:near?.side||null}:null)}
     if(resizing){const dx=(e.clientX-resizing.startX)/zoom,dy=(e.clientY-resizing.startY)/zoom;setBlocks(p=>p.map(b=>b.id!==resizing.id?b:{...b,w:Math.max(80,resizing.origW+dx),h:Math.max(40,resizing.origH+dy)}))}
-  },[dragging,connecting,resizing,findNearest,getCC,zoom]);
+  },[dragging,connecting,resizing,findNearest,getCC,zoom,marquee,groupDragging,groupResizing]);
 
   const handleMouseUp=useCallback(e=>{
+    // Marquee selection end
+    if(marquee){
+      const x1=Math.min(marquee.startX,marquee.curX),y1=Math.min(marquee.startY,marquee.curY);
+      const x2=Math.max(marquee.startX,marquee.curX),y2=Math.max(marquee.startY,marquee.curY);
+      const hits=blocks.filter(b=>b.x<x2&&b.x+b.w>x1&&b.y<y2&&b.y+b.h>y1).map(b=>b.id);
+      if(hits.length>1){setMultiSel(hits);setSelected(null)}
+      else if(hits.length===1){setSelected(hits[0]);setMultiSel([])}
+      else{setSelected(null);setMultiSel([])}
+      setMarquee(null);return;
+    }
+    // Group drag end - delete if over panel
+    if(groupDragging){
+      if(panelRef.current){const pr=panelRef.current.getBoundingClientRect();
+        if(e.clientX>=pr.left&&e.clientX<=pr.right&&e.clientY>=pr.top&&e.clientY<=pr.bottom){
+          setBlocks(p=>p.filter(b=>!multiSel.includes(b.id)));
+          setConnections(p=>p.filter(c=>!multiSel.includes(c.from)&&!multiSel.includes(c.to)));
+          setMultiSel([]);setSelected(null);
+        }}
+      setGroupDragging(null);setDragOverPanel(false);return;
+    }
+    if(groupResizing){setGroupResizing(null);return}
+    // Single block drag end - delete if over panel
     if(dragging&&panelRef.current){const pr=panelRef.current.getBoundingClientRect();if(e.clientX>=pr.left&&e.clientX<=pr.right&&e.clientY>=pr.top&&e.clientY<=pr.bottom){const did=dragging.id;setBlocks(p=>p.filter(b=>b.id!==did));setConnections(p=>p.filter(c=>c.from!==did&&c.to!==did));setSelected(null);setDragging(null);setResizing(null);setDragOverPanel(false);return}}
     if(connecting){const{x:mx,y:my}=getCC(e);const found=findNearest(mx,my,connecting.fromBlock);
       if(found){const fb=blocks.find(b=>b.id===connecting.fromBlock);let label="";if(fb?.type==="decision"){if(connecting.fromAnchor==="right")label="네";if(connecting.fromAnchor==="bottom")label="아니요"}
         setConnections(p=>[...p,{id:getId(),from:connecting.fromBlock,fromAnchor:connecting.fromAnchor,to:found.blockId,toAnchor:found.anchorId,label,color:null}])}
       setConnecting(null);setTempLine(null);setNearestAnchor(null)}
     setDragging(null);setResizing(null);setDragOverPanel(false);
-  },[connecting,blocks,findNearest,getCC]);
+  },[connecting,blocks,findNearest,getCC,marquee,groupDragging,groupResizing,multiSel]);
 
   useEffect(()=>{window.addEventListener("mousemove",handleMouseMove);window.addEventListener("mouseup",handleMouseUp);return()=>{window.removeEventListener("mousemove",handleMouseMove);window.removeEventListener("mouseup",handleMouseUp)}},[handleMouseMove,handleMouseUp]);
 
   const handleBlockDoubleClick=(e,id)=>{e.stopPropagation();const b=blocks.find(bl=>bl.id===id);if(!b||b.type==="terminal")return;setEditingBlock(id);setEditText(b.text||"")};
   const commitEdit=()=>{if(editingBlock)setBlocks(p=>p.map(b=>b.id===editingBlock?{...b,text:editText}:b));setEditingBlock(null);setEditText("")};
-  const deleteSelected=useCallback(()=>{if(!selected||editingBlock)return;setBlocks(p=>p.filter(b=>b.id!==selected));setConnections(p=>p.filter(c=>c.from!==selected&&c.to!==selected));setSelected(null)},[selected,editingBlock]);
+  const deleteSelected=useCallback(()=>{
+    if(editingBlock)return;
+    if(multiSel.length>0){
+      setBlocks(p=>p.filter(b=>!multiSel.includes(b.id)));
+      setConnections(p=>p.filter(c=>!multiSel.includes(c.from)&&!multiSel.includes(c.to)));
+      setMultiSel([]);setSelected(null);return;
+    }
+    if(!selected)return;
+    setBlocks(p=>p.filter(b=>b.id!==selected));setConnections(p=>p.filter(c=>c.from!==selected&&c.to!==selected));setSelected(null);
+  },[selected,editingBlock,multiSel]);
 
-  useEffect(()=>{const h=e=>{if((e.key==="Delete"||e.key==="Backspace")&&!editingBlock)deleteSelected();if(e.key==="Escape"){setSelected(null);setShowSubTypeMenu(null);setColorPicker(null);setShowExport(false);setPendingType(null);if(editingBlock)commitEdit()}};window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h)},[selected,editingBlock,editText,deleteSelected]);
+  useEffect(()=>{const h=e=>{
+    // Undo/Redo
+    if((e.ctrlKey||e.metaKey)&&e.key==="z"&&!e.shiftKey){e.preventDefault();undo();return}
+    if((e.ctrlKey||e.metaKey)&&(e.key==="Z"||(e.key==="z"&&e.shiftKey)||e.key==="y")){e.preventDefault();redo();return}
+    if((e.key==="Delete"||e.key==="Backspace")&&!editingBlock)deleteSelected();if(e.key==="Escape"){setSelected(null);setMultiSel([]);setShowSubTypeMenu(null);setColorPicker(null);setShowExport(false);setPendingType(null);setMarquee(null);if(editingBlock)commitEdit()}};window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h)},[selected,editingBlock,editText,deleteSelected,multiSel,undo,redo]);
   useEffect(()=>{if(!colorPicker)return;const h=()=>setColorPicker(null);window.addEventListener("click",h);return()=>window.removeEventListener("click",h)},[colorPicker]);
 
   const handleConnClick=(e,connId)=>{e.preventDefault();e.stopPropagation();setColorPicker({connId,x:e.clientX,y:e.clientY})};
@@ -412,17 +532,25 @@ function App(){
         {/* Canvas */}
         <div ref={scrollRef} className={dark?"dark-scroll":"light-scroll"} style={{flex:1,position:"relative",overflow:"auto"}}
           onDragOver={e=>e.preventDefault()}
-          onClick={e=>{if(pendingType){handleCanvasClick2(e);return}setSelected(null);setShowSubTypeMenu(null);setColorPicker(null);setShowExport(false)}}>
+          onMouseDown={e=>{
+            if(e.button!==0||pendingType||editingBlock)return;
+            // Check if clicking on empty canvas area - start marquee
+            const{x:mx,y:my}=getCC(e);
+            // Don't start marquee if clicking a block
+            const hitBlock=blocks.find(b=>mx>=b.x&&mx<=b.x+b.w&&my>=b.y&&my<=b.y+b.h);
+            if(!hitBlock&&!connecting){setMarquee({startX:mx,startY:my,curX:mx,curY:my})}
+          }}
+          onClick={e=>{if(pendingType){handleCanvasClick2(e);return}if(!marquee){setSelected(null);setMultiSel([])};setShowSubTypeMenu(null);setColorPicker(null);setShowExport(false)}}>
 
           <svg ref={svgRef} width={svgW} height={svgH} viewBox={`0 0 ${CW} ${CH}`}
-            style={{display:"block",cursor:pendingType?"crosshair":dragging?"grabbing":resizing?"nwse-resize":"default",transformOrigin:"0 0"}}>
+            style={{display:"block",cursor:marquee?"crosshair":pendingType?"crosshair":groupDragging?"grabbing":dragging?"grabbing":resizing||groupResizing?"nwse-resize":"default",transformOrigin:"0 0"}}>
             <DotGrid dark={dark}/>
             <rect x="0" y="0" width={CW} height={CH} fill="url(#dotgrid)"/>
             {connections.map(c=><ConnectionLine key={c.id} conn={c} blocks={blocks} dark={dark} onLineClick={handleConnClick}/>)}
             {renderTemp()}
             {connecting&&nearestAnchor&&<circle cx={nearestAnchor.cx} cy={nearestAnchor.cy} r={8} fill="rgba(37,99,235,0.15)" stroke="#2563EB" strokeWidth={2}/>}
             {blocks.map(block=>{
-              const anchors=getBlockAnchors(block);const isSel=selected===block.id;const bStyle=block.style||DEFAULT_STYLE;
+              const anchors=getBlockAnchors(block);const isSel=isBlockSelected(block.id);const bStyle=block.style||DEFAULT_STYLE;
               return(<g key={block.id}>
                 <BlockShape {...block} selected={isSel} id={block.id}/>
                 {editingBlock===block.id?(
@@ -432,11 +560,15 @@ function App(){
                   </foreignObject>
                 ):(<BlockText block={block}/>)}
                 <rect x={block.x} y={block.y} width={block.w} height={block.h} fill="transparent" stroke="none" style={{cursor:"move"}}
-                  onMouseDown={e=>handleBlockMouseDown(e,block.id)} onDoubleClick={e=>handleBlockDoubleClick(e,block.id)} onClick={e=>{e.stopPropagation();setSelected(block.id)}}/>
+                  onMouseDown={e=>handleBlockMouseDown(e,block.id)} onDoubleClick={e=>handleBlockDoubleClick(e,block.id)} onClick={e=>{e.stopPropagation();if(!multiSel.includes(block.id)){setSelected(block.id);setMultiSel([])}}}/>
                 {(isSel||connecting)&&anchors.map(a=>{const hov=hoveredAnchor?.blockId===block.id&&hoveredAnchor?.anchorId===a.id;return(<g key={a.id} onMouseEnter={()=>setHoveredAnchor({blockId:block.id,anchorId:a.id,role:a.role})} onMouseLeave={()=>setHoveredAnchor(null)} onMouseDown={e=>handleAnchorMouseDown(e,block.id,a.id,a)} style={{cursor:"crosshair"}}><circle cx={a.cx} cy={a.cy} r={hov?8:5.5} fill={hov?"#2563EB":(dark?"#1E293B":"white")} stroke="#2563EB" strokeWidth={2} style={{filter:hov?"drop-shadow(0 0 6px rgba(37,99,235,0.6))":"none"}}/>{hov&&(<g><rect x={a.cx-42} y={a.cy-32} width={84} height={24} rx={7} fill="#0F172A" opacity={.94}/><text x={a.cx} y={a.cy-17} textAnchor="middle" fontSize={11} fill="#fff" fontWeight="500" fontFamily="'Noto Sans KR',sans-serif">{a.role}</text></g>)}</g>)})}
                 {isSel&&!connecting&&(<g onMouseDown={e=>handleResizeMouseDown(e,block.id)} style={{cursor:"nwse-resize"}}><rect x={block.x+block.w-6} y={block.y+block.h-6} width={12} height={12} rx={3} fill={dark?"#334155":"white"} stroke="#2563EB" strokeWidth={1.5}/><line x1={block.x+block.w} y1={block.y+block.h+4} x2={block.x+block.w+4} y2={block.y+block.h} stroke="#2563EB" strokeWidth={1} opacity={.5}/><line x1={block.x+block.w+2} y1={block.y+block.h+4} x2={block.x+block.w+4} y2={block.y+block.h+2} stroke="#2563EB" strokeWidth={1} opacity={.5}/></g>)}
               </g>);
             })}
+            {/* Marquee selection rect */}
+            {marquee&&(()=>{const x=Math.min(marquee.startX,marquee.curX),y=Math.min(marquee.startY,marquee.curY),w=Math.abs(marquee.curX-marquee.startX),h=Math.abs(marquee.curY-marquee.startY);return(<rect x={x} y={y} width={w} height={h} fill="rgba(37,99,235,0.08)" stroke="#2563EB" strokeWidth={1.5} strokeDasharray="6 3" rx={2}/>)})()}
+            {/* Multi-select bounding box */}
+            {multiSel.length>1&&!groupDragging&&!groupResizing&&(()=>{const selB=blocks.filter(b=>multiSel.includes(b.id));if(selB.length<2)return null;const bx=Math.min(...selB.map(b=>b.x))-8,by=Math.min(...selB.map(b=>b.y))-8,br=Math.max(...selB.map(b=>b.x+b.w))+8,bb=Math.max(...selB.map(b=>b.y+b.h))+8;return(<g><rect x={bx} y={by} width={br-bx} height={bb-by} fill="none" stroke="#2563EB" strokeWidth={1.5} strokeDasharray="8 4" rx={4} opacity={.6}/><g onMouseDown={e=>handleResizeMouseDown(e,multiSel[0])} style={{cursor:"nwse-resize"}}><rect x={br-6} y={bb-6} width={12} height={12} rx={3} fill={dark?"#334155":"white"} stroke="#2563EB" strokeWidth={1.5}/></g><text x={bx+4} y={by-4} fontSize={11} fill="#2563EB" fontFamily="'Noto Sans KR',sans-serif" fontWeight="600">{multiSel.length}개 선택됨</text></g>)})()}
           </svg>
 
           {blocks.length===0&&(<div style={{position:"absolute",top:"50%",left:"calc(50% - 100px)",transform:"translate(-50%,-50%)",textAlign:"center",pointerEvents:"none",userSelect:"none"}}><div style={{fontSize:48,marginBottom:12,opacity:.2}}>📐</div><div style={{fontSize:16,fontWeight:600,color:dark?"#475569":"#888"}}>우측 패널에서 블록을 드래그하세요</div></div>)}
