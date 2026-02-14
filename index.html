@@ -261,10 +261,12 @@ function App(){
 
   const resetZoom=()=>{setZoom(1);setPan({x:0,y:0})};
 
-  const handleDragFromPanel=useCallback((e,type)=>{console.log('[FC] 패널에서 드래그 시작:',type);e.dataTransfer.setData("blockType",type)},[]);
+  const dragTypeRef=useRef(null);
+  const handleDragFromPanel=useCallback((e,type)=>{console.log('[FC] 패널에서 드래그 시작:',type);dragTypeRef.current=type;e.dataTransfer.effectAllowed='copy';e.dataTransfer.setData("text/plain",type)},[]);
   const handleCanvasDrop=useCallback(e=>{
-    e.preventDefault();const type=e.dataTransfer.getData("blockType");
+    e.preventDefault();const type=dragTypeRef.current||e.dataTransfer.getData("text/plain");
     console.log('[FC] 캔버스 드롭 이벤트, blockType:',type);
+    dragTypeRef.current=null;
     if(!type){console.warn('[FC] blockType 비어있음!');return;}
     const{x:mx,y:my}=getCC(e);let w=160,h=60;if(type==="decision"){w=130;h=90}if(type==="io"){w=170;h=60}
     const nb={id:getId(),type,x:mx-w/2,y:my-h/2,w,h,text:type==="terminal"?"시작":"",subType:type==="terminal"?"start":undefined,style:{...DEFAULT_STYLE}};
