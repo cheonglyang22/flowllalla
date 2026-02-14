@@ -53,18 +53,26 @@ function loadScript(src) {
 }
 
 async function boot() {
+  console.log('[FC] 1. React 로딩 시작...');
   await loadScript('https://unpkg.com/react@18/umd/react.production.min.js');
+  console.log('[FC] 2. React 로딩 완료, ReactDOM 로딩 시작...');
   await loadScript('https://unpkg.com/react-dom@18/umd/react-dom.production.min.js');
+  console.log('[FC] 3. ReactDOM 로딩 완료, Babel 로딩 시작...');
   await loadScript('https://unpkg.com/@babel/standalone/babel.min.js');
+  console.log('[FC] 4. Babel 로딩 완료, JSX 변환 시작...');
   
   var code = document.getElementById('app-code').textContent;
+  console.log('[FC] 5. 코드 길이: ' + code.length + '자');
   var transformed = Babel.transform(code, { presets: ['react'] }).code;
+  console.log('[FC] 6. JSX 변환 완료, 실행 시작...');
   var script = document.createElement('script');
   script.textContent = transformed;
   document.body.appendChild(script);
+  console.log('[FC] 7. 앱 실행 완료!');
 }
 
 boot().catch(function(err) { 
+  console.error('[FC] 부팅 실패:', err);
   document.getElementById('root').innerHTML = '<p style="color:red;padding:20px">Load error: ' + err.message + '</p>'; 
 });
 </script>
@@ -253,13 +261,15 @@ function App(){
 
   const resetZoom=()=>{setZoom(1);setPan({x:0,y:0})};
 
-  const handleDragFromPanel=useCallback((e,type)=>{e.dataTransfer.setData("blockType",type)},[]);
+  const handleDragFromPanel=useCallback((e,type)=>{console.log('[FC] 패널에서 드래그 시작:',type);e.dataTransfer.setData("blockType",type)},[]);
   const handleCanvasDrop=useCallback(e=>{
-    e.preventDefault();const type=e.dataTransfer.getData("blockType");if(!type)return;
+    e.preventDefault();const type=e.dataTransfer.getData("blockType");
+    console.log('[FC] 캔버스 드롭 이벤트, blockType:',type);
+    if(!type){console.warn('[FC] blockType 비어있음!');return;}
     const{x:mx,y:my}=getCC(e);let w=160,h=60;if(type==="decision"){w=130;h=90}if(type==="io"){w=170;h=60}
     const nb={id:getId(),type,x:mx-w/2,y:my-h/2,w,h,text:type==="terminal"?"시작":"",subType:type==="terminal"?"start":undefined,style:{...DEFAULT_STYLE}};
     if(type==="terminal")setShowSubTypeMenu({block:nb,mx:e.clientX,my:e.clientY});
-    else{setBlocks(p=>[...p,nb]);setSelected(nb.id)}
+    else{console.log('[FC] 블록 생성:',nb.id,type);setBlocks(p=>[...p,nb]);setSelected(nb.id)}
   },[getCC]);
 
   const handleSubTypeSelect=st=>{if(!showSubTypeMenu)return;const b={...showSubTypeMenu.block,subType:st,text:st==="start"?"시작":"끝"};setBlocks(p=>[...p,b]);setSelected(b.id);setShowSubTypeMenu(null)};
