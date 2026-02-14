@@ -120,11 +120,11 @@ function BlockShape({type,x,y,w,h,selected,id}){
   return null;
 }
 
-function ConnectionLine({conn,blocks,dark,onContextMenu}){
+function ConnectionLine({conn,blocks,dark,onLineClick}){
   const fb=blocks.find(b=>b.id===conn.from),tb=blocks.find(b=>b.id===conn.to);if(!fb||!tb)return null;
   const s=getAnchorPos(fb,conn.fromAnchor),e=getAnchorPos(tb,conn.toAnchor),path=makeCurvePath(s,e,conn.fromAnchor,conn.toAnchor);
   const label=conn.label||"",mx=(s.x+e.x)/2,my=(s.y+e.y)/2,dc=dark?"#94A3B8":"#505868",lc=conn.color||dc;
-  return(<g onContextMenu={ev=>onContextMenu(ev,conn.id)}><defs><marker id={`arr-${conn.id}`} markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 1, 8 3.5, 0 6" fill={lc}/></marker></defs><path d={path} fill="none" stroke="transparent" strokeWidth={14} style={{cursor:"context-menu"}}/><path d={path} fill="none" stroke={lc} strokeWidth={2} markerEnd={`url(#arr-${conn.id})`}/>{label&&(<g><rect x={mx-22} y={my-13} width={44} height={22} rx={6} fill={dark?"#1E293B":"#1a1a2e"} opacity={.92} stroke={lc} strokeWidth={.5}/><text x={mx} y={my+2} textAnchor="middle" fontSize={11} fontFamily="'Noto Sans KR',sans-serif" fill="#fff" fontWeight="600">{label}</text></g>)}</g>);
+  return(<g><defs><marker id={`arr-${conn.id}`} markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 1, 8 3.5, 0 6" fill={lc}/></marker></defs><path d={path} fill="none" stroke="transparent" strokeWidth={14} style={{cursor:"pointer"}} onClick={ev=>{ev.stopPropagation();onLineClick(ev,conn.id)}} onContextMenu={ev=>{ev.preventDefault();ev.stopPropagation();onLineClick(ev,conn.id)}}/><path d={path} fill="none" stroke={lc} strokeWidth={2} markerEnd={`url(#arr-${conn.id})`} style={{pointerEvents:"none"}}/>{label&&(<g style={{pointerEvents:"none"}}><rect x={mx-22} y={my-13} width={44} height={22} rx={6} fill={dark?"#1E293B":"#1a1a2e"} opacity={.92} stroke={lc} strokeWidth={.5}/><text x={mx} y={my+2} textAnchor="middle" fontSize={11} fontFamily="'Noto Sans KR',sans-serif" fill="#fff" fontWeight="600">{label}</text></g>)}</g>);
 }
 
 function DotGrid({dark}){
@@ -316,7 +316,7 @@ function App(){
   useEffect(()=>{const h=e=>{if((e.key==="Delete"||e.key==="Backspace")&&!editingBlock)deleteSelected();if(e.key==="Escape"){setSelected(null);setShowSubTypeMenu(null);setColorPicker(null);setShowExport(false);setPendingType(null);if(editingBlock)commitEdit()}};window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h)},[selected,editingBlock,editText,deleteSelected]);
   useEffect(()=>{if(!colorPicker)return;const h=()=>setColorPicker(null);window.addEventListener("click",h);return()=>window.removeEventListener("click",h)},[colorPicker]);
 
-  const handleConnRightClick=(e,connId)=>{e.preventDefault();e.stopPropagation();setColorPicker({connId,x:e.clientX,y:e.clientY})};
+  const handleConnClick=(e,connId)=>{e.preventDefault();e.stopPropagation();setColorPicker({connId,x:e.clientX,y:e.clientY})};
   const setConnColor=(connId,color)=>{setConnections(p=>p.map(c=>c.id===connId?{...c,color}:c));setColorPicker(null)};
 
   const downloadPNG=useCallback(()=>{
@@ -369,7 +369,7 @@ function App(){
             style={{display:"block",cursor:pendingType?"crosshair":dragging?"grabbing":resizing?"nwse-resize":"default",transformOrigin:"0 0"}}>
             <DotGrid dark={dark}/>
             <rect x="0" y="0" width={CW} height={CH} fill="url(#dotgrid)"/>
-            {connections.map(c=><ConnectionLine key={c.id} conn={c} blocks={blocks} dark={dark} onContextMenu={handleConnRightClick}/>)}
+            {connections.map(c=><ConnectionLine key={c.id} conn={c} blocks={blocks} dark={dark} onLineClick={handleConnClick}/>)}
             {renderTemp()}
             {connecting&&nearestAnchor&&<circle cx={nearestAnchor.cx} cy={nearestAnchor.cy} r={8} fill="rgba(37,99,235,0.15)" stroke="#2563EB" strokeWidth={2}/>}
             {blocks.map(block=>{
@@ -408,7 +408,7 @@ function App(){
           <div style={{fontSize:13,fontWeight:700,color:"#fff",letterSpacing:1.5,textTransform:"uppercase",padding:"10px 4px 12px",borderBottom:"1px solid rgba(255,255,255,0.08)",marginBottom:4}}>⬡ 블록 패널</div>
           {BLOCK_TYPES.map(renderPalette)}
           <div style={{padding:"12px 0 4px",borderTop:"1px solid rgba(255,255,255,0.06)",marginTop:8}}>
-            <div style={{fontSize:11,color:"#555",lineHeight:1.7}}>• 블록 클릭 → 캔버스 클릭으로 배치<br/>• 더블클릭으로 텍스트 편집<br/>• <span style={{color:"#777"}}>Ctrl+휠</span>로 캔버스 확대/축소<br/>• <span style={{color:"#777"}}>우클릭</span>으로 선 색상 변경</div>
+            <div style={{fontSize:11,color:"#555",lineHeight:1.7}}>• 블록 클릭 → 캔버스 클릭으로 배치<br/>• 더블클릭으로 텍스트 편집<br/>• <span style={{color:"#777"}}>Ctrl+휠</span>로 캔버스 확대/축소<br/>• <span style={{color:"#777"}}>선 클릭</span>으로 선 색상 변경</div>
           </div>
           <div style={{position:"relative"}}>
             <button onClick={e=>{e.stopPropagation();setShowExport(p=>!p)}} style={{width:"100%",padding:"10px 0",border:"none",borderRadius:10,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Noto Sans KR',sans-serif",background:blocks.length>0?"linear-gradient(135deg,#3B82F6,#2563EB)":"rgba(255,255,255,0.06)",color:blocks.length>0?"#fff":"#555",boxShadow:blocks.length>0?"0 2px 10px rgba(37,99,235,0.3)":"none",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>📥 내보내기 ▾</button>
