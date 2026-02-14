@@ -40,10 +40,35 @@ body{overflow:hidden;font-family:'Noto Sans KR',sans-serif}
 </head>
 <body>
 <div id="root"></div>
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script type="text/babel" data-type="module">
+<script>
+function loadScript(src) {
+  return new Promise(function(resolve, reject) {
+    var s = document.createElement('script');
+    s.src = src;
+    s.crossOrigin = 'anonymous';
+    s.onload = resolve;
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+async function boot() {
+  await loadScript('https://unpkg.com/react@18/umd/react.production.min.js');
+  await loadScript('https://unpkg.com/react-dom@18/umd/react-dom.production.min.js');
+  await loadScript('https://unpkg.com/@babel/standalone/babel.min.js');
+  
+  var code = document.getElementById('app-code').textContent;
+  var transformed = Babel.transform(code, { presets: ['react'] }).code;
+  var script = document.createElement('script');
+  script.textContent = transformed;
+  document.body.appendChild(script);
+}
+
+boot().catch(function(err) { 
+  document.getElementById('root').innerHTML = '<p style="color:red;padding:20px">Load error: ' + err.message + '</p>'; 
+});
+</script>
+<script id="app-code" type="text/plain">
 const{useState,useRef,useCallback,useEffect}=React;
 
 const FONTS=[
