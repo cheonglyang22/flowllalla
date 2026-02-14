@@ -261,18 +261,26 @@ function App(){
 
   const resetZoom=()=>{setZoom(1);setPan({x:0,y:0})};
 
-  const dragTypeRef=useRef(null);
-  const handleDragFromPanel=useCallback((e,type)=>{console.log('[FC] 패널에서 드래그 시작:',type);dragTypeRef.current=type;e.dataTransfer.effectAllowed='copy';e.dataTransfer.setData("text/plain",type)},[]);
-  const handleCanvasDrop=useCallback(e=>{
-    e.preventDefault();const type=dragTypeRef.current||e.dataTransfer.getData("text/plain");
-    console.log('[FC] 캔버스 드롭 이벤트, blockType:',type);
-    dragTypeRef.current=null;
-    if(!type){console.warn('[FC] blockType 비어있음!');return;}
-    const{x:mx,y:my}=getCC(e);let w=160,h=60;if(type==="decision"){w=130;h=90}if(type==="io"){w=170;h=60}
+  // Panel -> Canvas: click to add block (no HTML5 drag needed)
+  const[pendingType,setPendingType]=useState(null);
+  const handlePanelBlockClick=useCallback((type)=>{
+    console.log('[FC] 패널 블록 클릭:',type);
+    setPendingType(type);
+  },[]);
+  const handleCanvasClick2=useCallback(e=>{
+    if(!pendingType)return;
+    const container=scrollRef.current;if(!container)return;
+    const rect=container.getBoundingClientRect();
+    const sx=container.scrollLeft,sy=container.scrollTop;
+    const mx=e.clientX-rect.left+sx,my=e.clientY-rect.top+sy;
+    const type=pendingType;
+    console.log('[FC] 캔버스에 블록 배치:',type);
+    let w=160,h=60;if(type==="decision"){w=130;h=90}if(type==="io"){w=170;h=60}
     const nb={id:getId(),type,x:mx-w/2,y:my-h/2,w,h,text:type==="terminal"?"시작":"",subType:type==="terminal"?"start":undefined,style:{...DEFAULT_STYLE}};
     if(type==="terminal")setShowSubTypeMenu({block:nb,mx:e.clientX,my:e.clientY});
     else{console.log('[FC] 블록 생성:',nb.id,type);setBlocks(p=>[...p,nb]);setSelected(nb.id)}
-  },[getCC]);
+    setPendingType(null);
+  },[pendingType]);
 
   const handleSubTypeSelect=st=>{if(!showSubTypeMenu)return;const b={...showSubTypeMenu.block,subType:st,text:st==="start"?"시작":"끝"};setBlocks(p=>[...p,b]);setSelected(b.id);setShowSubTypeMenu(null)};
   const handleBlockMouseDown=(e,id)=>{if(e.button!==0)return;e.stopPropagation();setSelected(id);const b=blocks.find(bl=>bl.id===id);if(!b)return;const{x:mx,y:my}=getCC(e);setDragging({id,offsetX:mx-b.x,offsetY:my-b.y})};
@@ -305,7 +313,7 @@ function App(){
   const commitEdit=()=>{if(editingBlock)setBlocks(p=>p.map(b=>b.id===editingBlock?{...b,text:editText}:b));setEditingBlock(null);setEditText("")};
   const deleteSelected=useCallback(()=>{if(!selected||editingBlock)return;setBlocks(p=>p.filter(b=>b.id!==selected));setConnections(p=>p.filter(c=>c.from!==selected&&c.to!==selected));setSelected(null)},[selected,editingBlock]);
 
-  useEffect(()=>{const h=e=>{if((e.key==="Delete"||e.key==="Backspace")&&!editingBlock)deleteSelected();if(e.key==="Escape"){setSelected(null);setShowSubTypeMenu(null);setColorPicker(null);setShowExport(false);if(editingBlock)commitEdit()}};window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h)},[selected,editingBlock,editText,deleteSelected]);
+  useEffect(()=>{const h=e=>{if((e.key==="Delete"||e.key==="Backspace")&&!editingBlock)deleteSelected();if(e.key==="Escape"){setSelected(null);setShowSubTypeMenu(null);setColorPicker(null);setShowExport(false);setPendingType(null);if(editingBlock)commitEdit()}};window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h)},[selected,editingBlock,editText,deleteSelected]);
   useEffect(()=>{if(!colorPicker)return;const h=()=>setColorPicker(null);window.addEventListener("click",h);return()=>window.removeEventListener("click",h)},[colorPicker]);
 
   const handleConnRightClick=(e,connId)=>{e.preventDefault();e.stopPropagation();setColorPicker({connId,x:e.clientX,y:e.clientY})};
@@ -335,7 +343,7 @@ function App(){
     else if(bt.type==="process")shape=<g>{grad}<rect x={6} y={6} width={w} height={h} rx={5} ry={5} fill={`url(#${gId})`} stroke="rgba(255,255,255,0.3)" strokeWidth={1}/></g>;
     else if(bt.type==="decision"){const cx=6+w/2,cy=6+h/2;shape=<g>{grad}<polygon points={`${cx},6 ${6+w},${cy} ${cx},${6+h} 6,${cy}`} fill={`url(#${gId})`} stroke="rgba(255,255,255,0.3)" strokeWidth={1}/></g>}
     else{const sk=9;shape=<g>{grad}<polygon points={`${6+sk},6 ${6+w},6 ${6+w-sk},${6+h} 6,${6+h}`} fill={`url(#${gId})`} stroke="rgba(255,255,255,0.3)" strokeWidth={1}/></g>}
-    return(<div key={bt.type} draggable="true" onDragStart={e=>handleDragFromPanel(e,bt.type)} style={{cursor:"grab",padding:"10px 8px",background:"rgba(255,255,255,0.04)",borderRadius:10,border:"1px solid rgba(255,255,255,0.08)",display:"flex",flexDirection:"column",alignItems:"center",gap:6,transition:"all 0.2s",userSelect:"none"}} onMouseEnter={e=>{e.currentTarget.style.background="rgba(255,255,255,0.1)";e.currentTarget.style.borderColor=bt.color+"66"}} onMouseLeave={e=>{e.currentTarget.style.background="rgba(255,255,255,0.04)";e.currentTarget.style.borderColor="rgba(255,255,255,0.08)"}}><svg width={80} height={50} viewBox="0 0 80 50">{shape}</svg><span style={{fontSize:12,color:"#E0E0E0",fontWeight:600}}>{bt.label}</span><span style={{fontSize:10,color:"#777"}}>{bt.desc}</span></div>);
+    return(<div key={bt.type} onClick={()=>handlePanelBlockClick(bt.type)} style={{cursor:"pointer",padding:"10px 8px",background:pendingType===bt.type?"rgba(59,130,246,0.15)":"rgba(255,255,255,0.04)",borderRadius:10,border:pendingType===bt.type?"1px solid rgba(59,130,246,0.4)":"1px solid rgba(255,255,255,0.08)",display:"flex",flexDirection:"column",alignItems:"center",gap:6,transition:"all 0.2s",userSelect:"none"}} onMouseEnter={e=>{if(pendingType!==bt.type){e.currentTarget.style.background="rgba(255,255,255,0.1)";e.currentTarget.style.borderColor=bt.color+"66"}}} onMouseLeave={e=>{if(pendingType!==bt.type){e.currentTarget.style.background="rgba(255,255,255,0.04)";e.currentTarget.style.borderColor="rgba(255,255,255,0.08)"}}}><svg width={80} height={50} viewBox="0 0 80 50">{shape}</svg><span style={{fontSize:12,color:"#E0E0E0",fontWeight:600}}>{bt.label}</span><span style={{fontSize:10,color:pendingType===bt.type?"#60A5FA":"#777"}}>{pendingType===bt.type?"캔버스를 클릭하세요":bt.desc}</span></div>);
   };
 
   const renderTemp=()=>{
@@ -354,11 +362,11 @@ function App(){
       <div style={{display:"flex",flex:1,overflow:"hidden"}}>
         {/* Canvas */}
         <div ref={scrollRef} className={dark?"dark-scroll":"light-scroll"} style={{flex:1,position:"relative",overflow:"auto"}}
-          onDragOver={e=>e.preventDefault()} onDrop={handleCanvasDrop}
-          onClick={()=>{setSelected(null);setShowSubTypeMenu(null);setColorPicker(null);setShowExport(false)}}>
+          onDragOver={e=>e.preventDefault()}
+          onClick={e=>{if(pendingType){handleCanvasClick2(e);return}setSelected(null);setShowSubTypeMenu(null);setColorPicker(null);setShowExport(false)}}>
 
           <svg ref={svgRef} width={svgW} height={svgH} viewBox={`0 0 ${CW} ${CH}`}
-            style={{display:"block",cursor:dragging?"grabbing":resizing?"nwse-resize":"default",transformOrigin:"0 0"}}>
+            style={{display:"block",cursor:pendingType?"crosshair":dragging?"grabbing":resizing?"nwse-resize":"default",transformOrigin:"0 0"}}>
             <DotGrid dark={dark}/>
             <rect x="0" y="0" width={CW} height={CH} fill="url(#dotgrid)"/>
             {connections.map(c=><ConnectionLine key={c.id} conn={c} blocks={blocks} dark={dark} onContextMenu={handleConnRightClick}/>)}
@@ -400,7 +408,7 @@ function App(){
           <div style={{fontSize:13,fontWeight:700,color:"#fff",letterSpacing:1.5,textTransform:"uppercase",padding:"10px 4px 12px",borderBottom:"1px solid rgba(255,255,255,0.08)",marginBottom:4}}>⬡ 블록 패널</div>
           {BLOCK_TYPES.map(renderPalette)}
           <div style={{padding:"12px 0 4px",borderTop:"1px solid rgba(255,255,255,0.06)",marginTop:8}}>
-            <div style={{fontSize:11,color:"#555",lineHeight:1.7}}>• 블록을 캔버스에 드래그<br/>• 더블클릭으로 텍스트 편집<br/>• <span style={{color:"#777"}}>Ctrl+휠</span>로 캔버스 확대/축소<br/>• <span style={{color:"#777"}}>우클릭</span>으로 선 색상 변경</div>
+            <div style={{fontSize:11,color:"#555",lineHeight:1.7}}>• 블록 클릭 → 캔버스 클릭으로 배치<br/>• 더블클릭으로 텍스트 편집<br/>• <span style={{color:"#777"}}>Ctrl+휠</span>로 캔버스 확대/축소<br/>• <span style={{color:"#777"}}>우클릭</span>으로 선 색상 변경</div>
           </div>
           <div style={{position:"relative"}}>
             <button onClick={e=>{e.stopPropagation();setShowExport(p=>!p)}} style={{width:"100%",padding:"10px 0",border:"none",borderRadius:10,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Noto Sans KR',sans-serif",background:blocks.length>0?"linear-gradient(135deg,#3B82F6,#2563EB)":"rgba(255,255,255,0.06)",color:blocks.length>0?"#fff":"#555",boxShadow:blocks.length>0?"0 2px 10px rgba(37,99,235,0.3)":"none",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>📥 내보내기 ▾</button>
